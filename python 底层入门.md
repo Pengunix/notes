@@ -621,3 +621,293 @@ class NotIterable:
 ni = NotIterable()
 it = iter(ni)
 ```
+
+### 1.7 生成器
+
+#### 1.yield关键字
+
+* 只能用在函数内。
+* 在函数的任何地方出现了`yield`关键字，哪怕永远无法被执行，函数都会发生变化。
+
+这个变化就是当你以正常方式调用函数时，返回一个` 生成器`对象，此时函数还没有运行。
+
+```python
+def gen():
+    print("hello")
+    if 0:
+        yield
+g = gen()
+print(g)
+# <generator object at 0x0000...>
+# 未打印hello
+```
+
+#### 2.术语相关
+
+通常我们把含有`yield`关键字的函数称为 生成器函数 generator function ，把调用生成器函数返回的结果称为 生成器。
+
+但在python文档中：
+
+> 生成器 通常指的是生成器函数，但是在一定语境下也可以指代生成器迭代器 `generator iterator` ，为了避免歧义，推荐使用完整的术语。
+
+既然叫做迭代器，那么我们可以理解 生成器对象就是一个迭代器。
+
+从而满足 迭代器协议：
+
+* `__iter__`返回迭代器对象本身
+* `__next__`返回一个迭代数据，如果没有数据，抛出`StopIteration`异常
+
+#### 3.深入理解yield关键字
+
+##### 语句or表达式
+
+* yield 语句
+  * PEP252 -- Simple Generator
+  * Python 2.2
+
+* yield 表达式
+  * PEP342 -- Coroutines via Enhanced Generators
+  * Python 2.5
+
+##### yield 对函数做了什么
+
+` yield`关键字最根本作用是改变了函数的性质：
+
+1. 调用生成器函数并不是直接执行其中的代码，而是返回一个对象。
+2. 生成器函数内的代码，需要通过生成器对象来执行。
+
+从这一点，生成器函数的作用和 `类(class)`类似。
+
+生成器对象就是迭代器，所以其运行方式和迭代器是一致的：
+
+* 通过`next()` 函数来调用
+* 每次`next()` 都会遇到`yield`后返回的结果（作为`next()`的返回值）
+* 如果函数运行结束（即遇到`return`或代码执行完毕）则抛出`StopIteration`异常
+
+示例
+
+```python
+# 定义一个生成器函数
+def gen(a):
+    print("hello")
+    if a:
+        print("yield")
+        yield 666
+        print("back")
+    print("bye")
+    return "result"
+g1 = gen(False) # 不执行yield
+x = next(g1)
+'''
+hello
+bye
+Traceback (most recent call last):
+  File "D:\a.py", line 10, in <module>
+    x = next(g1)
+StopIteration: result
+return 的结果也会被异常带出函数
+'''
+g2 = gen(True)
+y = next(g2)
+print(y)
+'''
+hello
+yield
+666
+'''
+next(g2)
+'''
+back
+bye
+Traceback (most recent call last):
+  File "D:\a.py", line 10, in <module>
+    next(g2)
+StopIteration: result
+'''
+```
+
+##### 在循环中使用 yield
+
+只遇到一次`yield`语句的生成器就是只能迭代一次的迭代器，通常没什么价值
+
+要想多迭代几次，可以在函数内多次使用`yield`语句：
+
+```python
+def gen():
+    yield 1
+    yield 2
+    yield 3
+    yield 4
+```
+
+相对应的，`yield` 也可以搭配循环使用：
+
+```python
+# iterator count
+def count(start=0, step=1):
+    # count(10) -> 10 11 12...
+    # count(2.5, 0.5) -> 2.5 3.0 3.5 ...
+    n = start 
+    while True:
+        yield n
+        n += step
+```
+
+##### 生成的四个状态
+
+* 当调用生成器函数得到生成器对象时
+  * 此时的生成对象可以理解为**初始**状态
+* 通过`next()` 调用生成器对象，对应的生成器函数代码开始运行
+  * 此时生成器对象处于**运行中**状态
+* 遇到`yield`语句，`next()`返回时
+  * `yield`语句右边的对象作为`next()`的返回值
+  * 生成器在`yield`语句所在的位置**暂停**，当再次使用`next()`时继续在改位置运行
+* 如果执行到函数结束，则抛出`StopIteration`异常
+  * 无论是使用了`return`语句显式地返回值，或者默认返回`None`值，返回值都只能作为异常的值一并抛出
+  * 此时生成器对象处于**结束**状态
+  * 对于已经结束的生成器对象再次调用`next()`，直接抛出`StopIteration`异常，并且不包含返回值
+
+##### 使用yield重构迭代器
+
+与`class`定义迭代器对比
+
+| 动作           | class实现的迭代器                           | yield生成器          |
+| -------------- | ------------------------------------------- | -------------------- |
+| 定义迭代器     | class Iterator: def \__init__(self, *args): | def iter(*args): ... |
+| 构建迭代器     | Iterator(args)                              | iter(args)           |
+| next(iterator) | def \__next__(self): return values          | yield value          |
+| StopIteration  | raise StopIteration                         | return               |
+| iter(iterator) | def \__iter__(self): return self            | 自动实现             |
+
+生成器的三种应用场景：
+
+* 定义一个容器类的对象，为该对象实现`__iter__`接口
+* 定义一个处理其他可迭代对象的迭代器
+* 定义一个不依赖数据存储的数据生成器
+
+为数据列实现`__iter__()`接口
+
+```python
+# 迭代器类
+class CustIter:
+    def __init__(self, data):
+        self.data = data
+        self.index = 1
+    def __iter__(self):
+        return self
+    def __next__(self):
+        self.index = 1
+        if self.index < self.data.size:
+            return self.data.get_value(self.index)
+        else:
+            raise StopIteration
+# 可迭代数据类
+class CustData:
+    # 其余部分代码不重要 略
+    ...
+    @property
+    def size(self): # 假设可以得到数据的大小
+        return self.size
+    def get_value(self, index):
+        return index
+    def __iter__(self):
+        return CustIter(self)
+```
+
+yield 重构
+
+```python
+# 删除CustIter类
+class CustData:
+    # 其余部分代码不重要 略
+    ...
+    @property
+    def size(self): # 假设可以得到数据的大小
+        return self.size
+    def get_value(self, index):
+        return index
+    def __iter__(self):
+        index = -1      # 必须是局部变量
+        while index < 2: # 设置迭代完成的条件
+            index += 1
+            yield self.get_value(index)
+ mydata = CustData() # 注  mydata 是可迭代对象，但不是迭代器
+```
+
+实现有处理数据功能的迭代器
+
+```python
+BLACK_LIST = ["1", "2"]
+class DataFilter:
+    def __init__(self, actions):
+        self.actions = actions
+        self.index = 0
+    def __next__(self):
+        while self.index < len(self.actions):
+            action = self.actions[self.index]
+            self.index += 1
+            if action in BLACK_LIST:
+                continue
+            elif "3" in action:
+                return action * 2
+            else:
+                return action
+        raise StopIteration
+    def __iter__(self):
+        return self
+```
+
+yield重构
+
+```python
+BLACK_LIST = ["1", "2"]
+def filt(actions):
+    for action in actions:
+        if action in BLACK_LIST:
+            continue
+        elif "3" in action:
+            yield action * 2
+        else:
+            yield action
+actions = ["1", "3", "4"]
+for x in filt(actions):
+    print(x)
+```
+
+实现一个数据生成器
+
+计数器实现
+
+```python
+class Count:
+    def __init__(self, start):
+        self.start = start
+    def __iter__(self):
+        return self
+    def __next__(self):
+        if self.start > 0:
+            start -= 1
+            return self.start
+        else:
+            raise StopIteration()
+```
+
+yield重构
+
+```python
+def count(start):
+    while start > 0:
+        start -= 1
+        yield start
+for x in count(5):
+    print(x)
+```
+
+##### (重要) 生成器技术实现
+
+主要内容
+
+* 生成器函数和普通函数的区别
+* 生成器对象和生成器函数之间的关系
+* 生成器函数可以*暂停*执行的秘密
+
