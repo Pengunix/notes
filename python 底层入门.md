@@ -911,3 +911,266 @@ for x in count(5):
 * 生成器对象和生成器函数之间的关系
 * 生成器函数可以*暂停*执行的秘密
 
+**普通函数的运行机制**
+
+函数对象和代码对象
+
+每当定义了一个函数之后，就得到了一个 函数对象：
+
+```python
+def func():
+    ...
+print(func)
+# <function __main__.func()>
+```
+
+函数中的代码是保存在 **代码对象 Code Object** 中的：
+
+```python
+print(func.__code__)
+# <code object func at 0x..., file "<...>", line 1>
+```
+
+代码对象会随着函数对象一起创建，是函数对象的一个重要属性。
+
+> Code objects represent byte-compiled executable Python code, or byte code
+
+代码对象中重要的属性以`co_`开头：
+
+```python
+func_code = func.__code__
+for attr in dir(func_code):
+    if attr.starstwith("co_"):
+        print(f"{attr}\t: {getattr(func_code, attr)}")
+'''
+co_argcount     : 0
+co_cellvars     : ()
+co_code : b'd\x00S\x00'
+co_consts       : (None,)
+co_filename     : <ipython-input-1-4152f59160a0>
+co_firstlineno  : 1
+co_flags        : 67
+co_freevars     : ()
+co_kwonlyargcount       : 0
+co_lines        : <built-in method co_lines of code object at 0x000001F0961F68C0>
+co_linetable    : b'\x04\x01'
+co_lnotab       : b'\x00\x01'
+co_name : func
+co_names        : ()
+co_nlocals      : 0
+co_posonlyargcount      : 0
+co_stacksize    : 1
+co_varnames     : ()
+'''
+```
+
+**函数运行帧**
+
+函数对象和代码对象保存了函数的基本信息，当函数运行时，还需要一个对象来保存运行状态。
+
+这个对象就是**帧对象（Frame Object）**
+
+> Frame objects represent execution frames.
+
+每次调用一个函数，都会创建帧对象，来记录每次运行的状态。
+
+使用`inspect`检查帧对象
+
+```python
+import inspect
+
+def foo():
+    # 获取到函数的运行帧并返回
+    # 通常情况下 函数运行帧 在函数运行结束后会被立即销毁
+    return inspect.currentframe()
+f1 = foo() # 但由于变量被引用，所以帧不会被垃圾回收
+print(f1)
+# <frame at 0x..., file '...', line 5, code foo>
+```
+
+```python
+# jupyter 运行此代码 导入 import objgraph
+# 再调用一次，获取另一个帧
+f2 = foo()
+
+# 函数对象、代码对象和帧对象之间的关系
+objgraph.show_backrefs(foo.__code__)
+```
+
+![image-20220606034034833](python 底层入门.assets/image-20220606034034833.png)
+
+可见 `function` 和 `frame`对象均有对`code`的引用。
+
+帧对象中重要的属性以`f_`开头：
+
+* `f_code`：执行的代码对象
+* `f_back`: 指向上一个帧，也就是调用者的帧
+* `f_locals`: 局部变量
+* `f_globals`: 全局变量
+* `f_lineno` ：当前对应的行号
+
+**函数运行栈**
+
+当一个函数调用了另一个函数，此时前一个函数还没有结束，所以这两个函数的帧对象是同时存在的。
+
+比如，我们的程序一般始于一个`main`函数，然后又调用其他函数，以此类推。
+
+因此，一个程序的运行期，同时存在很多个帧对象。
+
+函数之间的调用关系是**先执行的后退出**，所以帧对象之间的关系也是**先入后出**，正好以**栈**的方式保存。
+
+因此，函数的运行帧又叫**栈帧**。
+
+注：一个线程只有一个函数的运行栈。
+
+> 观察此过程，可以安装vscode的python preview模块
+
+```python
+# 展示发生函数调用时的栈
+def foo():
+    return inspect.currentframe()
+
+def bar():
+    return foo() # 返回foo函数运行时的帧对象
+f1 = bar()
+objgraph.show_refs(f1)
+```
+
+![image-20220606035431001](python 底层入门.assets/image-20220606035431001.png)
+
+**生成器函数有何不同**
+
+生成器函数依然是函数对象，当然也包括了代码对象。
+
+```python
+import inspect
+def gen_foo():
+    for _ in range(10):
+        yield inspect.currentframe() # 每一次迭代都返回当前帧
+```
+
+调用生成器函数不会直接运行（也就是说，不像普通函数那样创建帧对象并且压入函数栈），而是得到一个生成器对象。
+
+那么秘密自然在生成器对象里：
+
+```python
+gf = gen_foo()
+show_refs(gf)
+```
+
+![image-20220606040112014](python 底层入门.assets/image-20220606040112014.png)
+
+当每次使用`next()`对生成器进行迭代时，都用这个帧对象`gi_frame`来保存状态：
+
+```python
+# 展示生成器迭代过程中都是同一个frame对象
+gf = gen_foo()
+# 存为变量，不然迭代结束属性会清空
+gi_frame = gf.gi_frame
+# 保存所有迭代结果
+frames = list(gf)
+print(gf.gi_frame) # None
+for f in frames:
+    print(f is gi_frame)
+# True * 10
+```
+
+生成器的frame对象在暂停状态下看不到调用关系图：
+
+```python
+gf = gen_foo()
+# f = next(gf)
+show_refs(gf.gi_frame) # 当执行到此 函数执行结束 函数帧已经出栈
+```
+
+![image-20220606040816751](python 底层入门.assets/image-20220606040816751.png)
+
+观察生成器运行时运行栈的关系图
+
+```python
+def gen_frame_graph():
+    for _ in range(10):
+        # 运行时生成图形
+        graph = show_refs(inspect.currentframe())
+        yield graph
+gfg = gen_frame_graph()
+# 定义两个不同名的函数是为了方便观察栈的变化
+def func_a(g):
+    return next(g)
+def func_b(g):
+    return next(g)
+func_a(gfg)
+```
+
+![image-20220606041431193](python 底层入门.assets/image-20220606041431193.png)
+
+综上总结：
+
+* 生成器函数并不直接运行，而是借助生成器对象来间接运行
+* 创建生成器对象的同时创建了帧对象，并且由生成器对象保持引用
+* 每次使用`next()`调用生成器时，就是将生成器引用的帧对象入栈
+* 当`next()`返回时，也就是代码遇到`yield`暂停的时候，就是将帧出栈
+* 知道迭代结束，帧最后一次出栈，并且被销毁
+
+**同步和异步的概念**
+
+普通函数：
+
+* 调用函数：构建帧对象并入栈
+* 函数执行结束：帧对象出栈并销毁
+
+```python
+# 普通函数只能以同步方式运行多任务
+def sync_task_runner():
+    task_a()
+    task_b() # 等到task_a执行结束才会运行
+```
+
+生成器函数：
+
+* 创建生成器： 构建帧对象
+* （多次）通过`next()`出发执行：帧入栈
+* （多次）通过`yield`帧出栈（保留）
+* 迭代结束：帧出栈并销毁
+
+```python
+# 生成器函数让异步称为可能
+def async_task():
+    # step 1
+    yield
+    # step 2
+    yield
+    # step 3
+    yield
+# 任务队列
+all_tasks = []
+# 创建两个任务
+async_task_a = async_task()
+async_task_b = async_task()
+# 加入任务队列
+all_tasks.append(asnc_task_a)
+all_tasks.append(asnc_task_b)
+def async_task_runner():
+    # 简易异步任务调度器
+    for task in all_tasks:
+        next(task)
+```
+
+![image-20220606043055017](python 底层入门.assets/image-20220606043055017.png)
+
+**从生成器到协程**
+
+现在，我们可以更好地理解所谓的`generator iterator`是什么了：
+
+> 生成器对象是一个用来迭代执行生成器函数的迭代器
+
+* 数据的迭代器：针对一个包含很多元素的数据集，逐个返回其中的元素
+* 生成器迭代器：针对一个包含很多代码的函数，分段执行其中的代码
+
+让一个函数多次迭代运行其中的代码才是生成器对象最根本的作用，而不仅是字面意义上的*生成数据的东西*
+
+迭代产生数据只是迭代器执行代码的自然结果。
+
+当用生成器来实现迭代器的时候，我们更加关注`yield <value>`返回出的数据。
+
+如果关注点在**被迭代执行的代码上**，就能对生成器有个全新的认识，就是**协程**。 
