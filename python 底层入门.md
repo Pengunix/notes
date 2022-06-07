@@ -1174,3 +1174,288 @@ def async_task_runner():
 当用生成器来实现迭代器的时候，我们更加关注`yield <value>`返回出的数据。
 
 如果关注点在**被迭代执行的代码上**，就能对生成器有个全新的认识，就是**协程**。 
+
+##### 协程（yield）
+
+基于生成器的协程
+
+> Generator-based Coroutines
+>
+> Deprecated since version 3.8, will be removed in version 3.11: Use `async def`instead.
+
+对比 generator 和 coroutine
+
+虽然py有了新的语法，但是他只是增加了一个原生的`coroutine`类型。
+
+```python
+# 生成器版协程
+def generator_func():
+    yield
+gen = generator_func()
+
+print(gen)
+print(sorted(set(dir(gen)) - set(dir(object))))
+'''
+<generator object generator_func at 0x0000029945CE4740>
+['__del__', '__iter__', '__name__', '__next__', '__qualname__', 'close', 'gi_code', 'gi_frame', 'gi_running', 'gi_yieldfrom', 'send', 'throw']
+'''
+```
+
+```python
+# 新版协程
+async def coroutine_func():
+    await coroutine_func()
+coro = coroutine_func()
+print(coro)
+print(sorted(set(dir(coro)) - set(dir(object))))
+'''
+<coroutine object coroutine_func at 0x00000299478B1FC0>
+['__await__', '__del__', '__name__', '__qualname__', 'close', 'cr_await', 'cr_code', 'cr_frame', 'cr_origin', 'cr_running', 'send', 'throw']
+'''
+```
+
+这俩完全一样，除了`__next__`被去掉，因为协程不需要迭代。
+
+`__iter__`换成了`__await_`
+
+`gi_yieldfrom`换成了`cr_await`
+
+为了更好理解和学习协程，有必要了解两者关系及不同。
+
+**生成器的增强点**
+
+前面提到过生成器最大的改变点就是yield语句升级为了yield表达式[见yield对函数做了什么](#####yield 对函数做了什么)
+
+所谓**表达式（Expression）**，意味着他可以被解析成一个**值**，然后赋值给变量。
+
+```python
+x = yield
+# 计算后赋值
+x = yield + 1
+# 表达式 作为函数参数 但是需要使用()
+print((yield))
+# 以上 yield 表达式均不能用在函数外面
+```
+
+**`yield`表达式如何获取到值？**
+
+```python
+def show_yield_value():
+    print("开始")
+    x = yield
+    print(f"x is {x}")
+g = show_yield_value()
+next(g) # 第一次
+next(g) # 第二次
+'''
+x is None
+---------------------------------------------------------------------------
+StopIteration                             Traceback (most recent call last)
+Input In [8], in <cell line: 1>()
+----> 1 next(g)
+
+StopIteration:
+'''
+```
+
+使用`next()`函数来驱动生成器时，`yield`表达式的值总为`None`。
+
+为生成器增加一个`send()`方法，改方法可以接受一个参数。
+
+`send`方法顾名思义，将改参数发送给生成器，时生成器恢复运行的同时，将该入参作为**yield表达式**的值。
+
+```python
+# 还是上面的生成器函数
+g = show_yield_value()
+g.send("hello") # 第一次只能是None
+'''
+---------------------------------------------------------------------------
+TypeError                                 Traceback (most recent call last)
+Input In [13], in <cell line: 1>()
+----> 1 g.send("hell")
+
+TypeError: can't send non-None value to a just-started generator
+'''
+
+# 修改后 
+g.send(None)
+"""
+开始
+"""
+g.send("hello")
+"""
+x is hello
+---------------------------------------------------------------------------
+StopIteration                             Traceback (most recent call last)
+Input In [8], in <cell line: 1>()
+----> 1 g.send("hello")
+
+StopIteration:
+"""
+```
+
+**关于prime**
+
+对于刚刚创建好的生成器，总是需要`send(None)`，使其运行到`yield`上方暂停，这个步骤称为`prime`。
+
+>这里prime做动词意思：PREPARE SOMEBODY to prepare someone for a situation so that they know what to do. 使某些人、东西准备好应付某个情况。
+>
+>prime在《流畅的python》中文版被翻译为 **预激** ，感觉过于专业拗口，其实这个步骤后续没有那么重要（后面会解释），所以我就直接称为 **激活** 。
+
+> 最先调用next(my_coro)函数这一步通常称为“预激”（prime）协程（即，让协程向前执行到第一个yield表达式，准备好作为活跃的协程使用）。
+
+**yield表达式的优先级**
+
+```python
+def add_yield_value():
+    x = yield + 1 # error
+    print(f'x is {x}')
+g = add_yield_value()
+g.send(None) # prime
+# 输出了一个1
+g.send(1)
+'''
+x is 1
+---------------------------------------------------------------------------
+StopIteration                             Traceback (most recent call last)
+Input In [8], in <cell line: 1>()
+----> 1 g.send(1)
+
+StopIteration:
+'''
+# 出现此错误的原因大概是因为yield仍然具有作为yield语句的功能 将其后面的对象返回出来
+# yield + 1 等价于 (yield +1) +号相当于是一个正号 所以第一次send返回1
+# 要想得到预期结果 改为(yield) + 1
+```
+
+yield表达式优先级比较低，要想实现相应的功能尽可能地给yield加括号 提高优先级。
+
+**send总结**
+
+* `send`是生成器对象的方法
+* 对于生成器对象`g`，`next(g)` 等价于 `g.send(None)`
+* 只有当生成器处在**暂停**状态时，才能传入非None值
+* `send`方法是为了协程而增加的api，所以：
+  * 如果将生成器视作协程，就应该只用`sned`方法
+  * 如果视作迭代器，就仍用`next`
+
+所以，后面我们统一使用`g.send(None)`方式。
+
+简单的echo示例
+
+```python
+def gen_echo():
+    while True:
+        print((yield))
+echo = gen_echo()
+echo.send(None) # prime
+echo.send(1)
+# 如何结束这个服务
+# 传入StopIteration?
+# 事实上不行
+```
+
+**使用`close()`结束生成器**
+
+当生成器作为迭代器来用的时候，他的生命周期取决于有多少元素可以迭代。
+
+当作为协程来用的时候，通常可以视作在执行一个任务，我们希望任务的终止变得可控。
+
+新增的`close`方法就是用来结束一个协程：
+
+```python
+echo.close()
+echo.send("hi")
+'''
+---------------------------------------------------------------------------
+StopIteration                             Traceback (most recent call last)
+Input In [17], in <cell line: 1>()
+----> 1 echo.send("hi")
+
+StopIteration:
+'''
+```
+
+由于echo协程非常简单，所以他可以直接结束。
+
+如果协程代码比较复杂，他可能需要在结束的时候做一些善后处理，比如释放资源等。
+
+类似于`StopIteration`的实现机制，结束协程也是靠异常来实现的：
+
+```python
+def gen_echo_v2():
+    while 1:
+        try:
+            x = yield
+        except GeneratorExit: # 协程也叫这个
+            print("exit") # 做善后处理
+            return      # 必须要结束函数 break 同理 如果没有进行此操作 回到yield 则运行时错误
+        else:
+            print(x)
+```
+
+```python
+echo_v2 = gen_echo_v2()
+echo_v2.send(None)  # 既然有try yield 那么在激活后才能捕获异常 
+echo_v2.close() # 没有 激活也可以close 但是什么都没有发生
+```
+
+除了显式地调用`close`方法，如果生成器对象被垃圾回收，也会自动调用`close`:
+
+```python
+# 例如
+del echo_v2 
+# 或者 重新赋值 都会出发close
+echo_v2 = 12
+```
+
+**使用`throw()`将异常抛给`yield`**
+
+类似`close()` 只是它是固定的`GeneratorExit`类型，而throw是任意的。
+
+```python
+def gen_echo_v3():
+    while 1:
+        try:
+            x = yield
+        except GeneratorExit:
+            print("exit")
+            return
+        except KeyboardInterrupt:
+            print("Ctrl c") # 其他异常没有硬性要求退出 可以不return
+        else:
+            print(x)
+```
+
+```python
+echo_v3 = gen_echo_v3()
+echo_v3.send(None) # prime
+echo_v3.throw(KeyboardInterrupt)
+echo_v3.throw(RuntimeError) # 如果传入了没有处理的异常则直接抛出到调用部分 也会造成生成器退出
+```
+
+**协程的几个功能点**
+
+```python
+# 例子来自《流畅的python》
+def coro_averager():
+    # 计算移动平均值
+    count = 0
+    total = 0
+    avg = None
+    while 1:
+        try:
+            val = yield avg
+        except GeneratorExit:
+            return total, count, avg
+        else:
+            total += val
+            count += 1
+            avg = total/count
+```
+
+1. 在`yield`位置产出数据
+2. 在`yield`位置暂停
+3. 在`yield`位置恢复，并接收新的参数
+4. 在`yield`位置传入结束信号
+5. 在`yield`位置传入其他异常
