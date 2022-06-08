@@ -1459,3 +1459,123 @@ def coro_averager():
 3. 在`yield`位置恢复，并接收新的参数
 4. 在`yield`位置传入结束信号
 5. 在`yield`位置传入其他异常
+
+##### yield三种用法
+
+**基于生成器的协程 概念**
+
+按照Python 文档的描述，所谓的 *基于生成器的协程* 指的是用`yield from`创建的生成器，并且还要搭配`asyncio.corotine`装饰器来使用。
+
+**生成器的三种模式**
+
+来自龟叔的解释
+
+Python之父Guido在一封邮件里总结道，生成器有三种模式：
+
+> There's the traditional "pull" style (iterators), "push" style (like the averaging example),
+>
+> and then there are "tasks".
+
+* pull 特点在于能不断向外产出数据，也就是迭代器
+* push 特点在于能不断向内发送数据，比如上一章中的计算平均移动的例子，是非常早的协程概念
+* task 任务式 (Asyncio里的协程)
+
+![image-20220608184437822](python%20%E5%BA%95%E5%B1%82%E5%85%A5%E9%97%A8.assets/image-20220608184437822.png)
+
+![image-20220608184532997](python%20%E5%BA%95%E5%B1%82%E5%85%A5%E9%97%A8.assets/image-20220608184532997.png)
+
+**data vs event **
+
+一句话解释是：
+
+* pull/push 都是受**数据驱动**的
+* task是受**事件**驱动的
+
+```python
+# pull 风格的生成器伪代码
+def pull_style():
+    while still_have_data:
+        yield data
+```
+
+```python
+# push 伪代码
+def push_style():
+    while still_have_data:
+        input_data = yield output_data
+```
+
+```python
+# task 生成器 协程
+def task_style():
+    ??? = yield ???
+```
+
+**什么是event?**
+
+事件（event）是个抽象的概念，就是指一件事情发生了。
+
+例如：
+
+要休息3秒 钟后继续执行， 3秒时间到，这就是一个事件。
+
+再例如：
+
+要读取网络数据
+
+```python
+socket.recv(1024)
+```
+
+如果socket还没收到数据，此时这个调用就会阻塞，知道有数据可读。socket**变得可读**，这就是一个事件。
+
+**event是如何运作的**
+
+事件通常是通过**回调函数（callback）**来处理的。
+
+```python
+# 设置回调函数
+# 3s后调用func
+call_later(3, func)
+# 当socker 可读时调用read
+register(sock, selectors.EVENT_READ, read)
+```
+
+* 那为什么要让出`yield`执行权（也就是出栈）？
+  * 遇到什么样的事件需要`yield`？
+  * 在出栈前该如何设置事件（回调）？
+* 凭什么能恢复执行（入栈）？
+  * 是谁促成了事件的发生？
+  * 是谁（感知了事件的发生）让出栈的协程再次入栈（也就是说，谁来调用`send`）？
+
+既然协程不需要写回调函数，那这些是怎么回事？
+
+##### 协程（yield from)
+
+入门例子
+
+绝大多数及教程，包括《流畅的python》这本书中，关于`yield from`的基础例子非常糟糕。
+
+基本上是以一个`for`开场。
+
+然后各种新术语安排上，什么委派生成器，子生成器等。。
+
+这些难免让人迷惑，费这么大力气就是为了少些一层循环？
+
+**语法**
+
+```python
+RESULT = yield from EXPR # 表达式的值必须是一个可迭代对象
+```
+
+例子
+
+![image-20220608191502801](python%20%E5%BA%95%E5%B1%82%E5%85%A5%E9%97%A8.assets/image-20220608191502801.png)
+
+继续简化
+
+![image-20220608191754919](python%20%E5%BA%95%E5%B1%82%E5%85%A5%E9%97%A8.assets/image-20220608191754919.png)
+
+再简化
+
+![image-20220608191917826](python%20%E5%BA%95%E5%B1%82%E5%85%A5%E9%97%A8.assets/image-20220608191917826.png)
