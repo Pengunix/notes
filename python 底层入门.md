@@ -409,7 +409,7 @@ while 1:
 * 将某些符合条件的数据`*2`后返回
 
 ```python
-BLACK_LIST = ["白嫖"，"取关"]
+BLACK_LIST = ["白嫖", "取关"]
 
 class SuzhiIterator:
     def __init__(self, actions):
@@ -458,7 +458,7 @@ class SuzhiActions:
     def __init__(self, actions):
         self.actions = actions
     def __iter__(self):
-        return SuzhiIterator(self.actions)
+        return SuzhiIterator(self.actions) # return self 也可
 for x in SuzhiActions(actions):
     print(x)
 ```
@@ -1579,3 +1579,184 @@ RESULT = yield from EXPR # 表达式的值必须是一个可迭代对象
 再简化
 
 ![image-20220608191917826](python%20%E5%BA%95%E5%B1%82%E5%85%A5%E9%97%A8.assets/image-20220608191917826.png)
+
+**定义一个同步模式的简单任务**
+
+```python
+def one_task():
+    # 一个任务
+    print('big task')
+    ... # 其他步骤
+    print('begin big_step')
+    big_result = big_step()
+    print(f'end big_step with {big_result}')
+    ... # 其他步骤
+    print('end task')
+def big_step():
+    ... # 其他小步骤
+    print('begin small step')
+    small_result = small_step()
+    print(f'end small step with {small_step}')
+    ... # 其他小步骤
+    return small_result * 1000
+def small_step():
+    print('working..')
+    return 123 # 完成
+one_task()  # 执行任务
+```
+
+当小步骤遇到阻塞
+
+```python
+from time import sleep
+def small_step():
+    print('working...')
+    sleep(2)
+    print("done")
+    return 123
+```
+
+可以通过yield创建协程 阻塞由下游传染至上游
+
+```python
+# small step 
+yield sleep(2)
+# big_step
+small_coro = small_step()
+while 1:
+    try:
+    	x = small_coro.send(None)
+    except StopIteration as e:
+        small_result = e.value
+        break
+    else:
+        pass
+```
+
+yield 可以正常运行，但阻塞问题仍然没有解决
+
+```python
+# small step
+yield sleep,2 # 不在这里调用 传染至 else:
+```
+
+```python
+try:
+    ...
+except ...:
+  	...
+else:
+    # pass
+    yield x # 传染至one_task
+```
+
+```python
+# one_task
+# big_result = big_step()
+big_coro = big_step()
+while 1:
+    try:
+    	x = big_coro.send(None)
+    except StopIteration as e:
+        big_result = e.value
+        break
+    else:
+        func, arg = x # 传出的是sleep 2
+        func(arg) # 调用sleep(2)
+```
+
+**改用yield from **
+
+```python
+# big_step
+small_result = yield from small_step() #  正常运行
+```
+
+**统一使用yield from**
+
+```python
+# small_step 
+yield from (sleep, 2) # 错误，相当于yield 一次 sleep 又一次 2 yield from 首先要调用iter(EXPR)
+# 问题出在 func, arg = x
+# TypeError cannot unpack non-iterable built_in_function_or_method object
+
+# 所以 定义一个类
+class YieldFrom:
+    def __init__(self, obj):
+        self.obj = obj
+    def __iter__(self):
+        yield  self.obj
+# 改为
+yield from YieldFrom((sleep, 2)) # 传入元组
+```
+
+又正常了
+
+**将任务彻底协程化**
+
+```python
+# one_task
+# big_coro = big_step()
+# while 1:
+# 		...
+# 改为
+big_result = yield from big_step()
+```
+
+```python
+# 调用
+one_task()
+# <generator object one_task at 0x... >
+# 这样任务就会会返回一个生成器 无法运行
+```
+
+```python
+# 定义一个通用任务驱动器
+class Task:
+    def __init__(self, coro):
+        self.coro = coro
+    def run(self):
+		while 1:
+    		try:
+    			x = self.coro.send(None)
+    		except StopIteration as e:
+        		result = e.value
+        		break
+    		else:
+        		func, arg = x
+        		func(arg)
+```
+
+
+
+```python
+# 运行
+t = Task(one_task())
+```
+
+但是 此时的兼容性并不好
+
+例如：
+
+```python
+else:
+    func, arg = x
+    func(arg)
+```
+
+找到YielfFrom类，修改
+
+```python
+def __iter__(self):
+    # yield self.value
+    yield self
+```
+
+Task 类
+
+```python
+else:
+    assert isinstance(x, YieldFrom)
+    ...
+```
+
