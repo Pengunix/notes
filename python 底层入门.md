@@ -1760,3 +1760,234 @@ else:
     ...
 ```
 
+我们来看最终代码
+
+```python
+import time
+from time import sleep
+
+class YieldFrom:
+    def __init__(self, obj):
+        self.value = obj
+    def __iter__(self):
+        yield self
+class Task:
+    def __init__(self, coro):
+        self.coro = coro
+    def run(self):
+        while 1:
+            try:
+                x = self.coro.send(None)
+            except StopIteration as e:
+                result = e.value
+                break
+            else:
+                assert isinstance(x, YieldFrom)
+                func, arg = x.value
+                func(arg)
+def small_step():
+    print("working..")
+    t1 = time.time()
+    yield from YieldFrom((sleep, 2))
+    assert time.time() - t1 > 2, '时间不足'
+    print("working ...")
+    return 123
+def big_step():
+    ... # 小步骤
+    small_result = yield from small_step()
+    print(f"small step end with {small_result}")
+    return small_result * 1888
+def one_task():
+    # 一个任务
+    print("start task")
+    ... # 其他步骤
+    print("begin big step")
+    big_result = yield from big_step()
+    print('endbigstep')
+    ... # 其他步骤
+    print('end task')
+if __name__ == "__main__":
+    t = Task(one_task())
+    t.run()
+```
+
+升级为新的语法
+
+1. 首先将其中所有的 `yield from`替换成`await`
+2. `__iter__`替换 为 `__await__`
+3. 包含`await`的函数改为`async def`
+
+两次程序结果一模一样
+
+两个程序的对比
+
+使用`yield from`生成的函数成为`generator function` 执行的结果称为`generator`
+
+使用`await`生成的函数称为`coroutine function`执行的结果称为`corotine`
+
+我们将`corotine`的协程称为`native corotine`, `generator`的协程称为`generator based corotine`
+
+既然都已经升级为新语法了 我们可以把`YieldFrom`这个类改为`awaitable`
+
+那么什么是`awaitable`呢
+
+这个概念分为两种，一种是我们在上面定义的`corotine`，另外一种就是我们在`class Awaitable`定义的`__await__`方法
+
+这两种都可以跟在`await`关键字后面。
+
+在`asyncio`里有两种`class`也是`awaitable`的，一个是`Task`一个是`Future`，更为准确的说是一个，`Future`，因为`Task`实际上是继承`Future`
+
+在`Future`相关的代码里
+
+```python
+def __await__(self):
+    if self.done():
+        self._asyncio_future_blocking ...
+        yield self
+        ...
+__iter__ = __await__ # 兼容 yield from
+```
+
+`yield self`非常关键，可以说在`asyncio`里面只有在这个地方才能找到`yield`
+
+在前文生成器原理讲到过`yield`会让函数出栈，也就是让出执行权，实际上`await`没有此功能，他在一定程度上等同于`yield from`，负责将这些协程链接起来，没有将函数出栈的能力。
+
+
+
+两个示例代码
+
+```python
+class Task:
+    def __init__(self, coro):
+        self.coro = coro
+    def run(self):
+        while 1:
+            try:
+                x = self.coro.send(None) # 程序从此处开始 执行
+            except StopIteration as e:
+                result = e.value
+                break
+            else:
+                assert isinstance(x, YieldFrom)
+                func, arg = x.value
+                func(arg)
+```
+
+```python
+async def one_task():
+    print('begin big_step')
+    big_result = await big_step()
+    print(big_result)
+async def big_step():
+    print('begin small step')
+    small_result = await small_step()
+    print(small_result)
+    return small_result * 1000
+async def small_step():
+    t1 = time.time()
+    await Awaitable((sleep, 2))
+    assert time.time - t1 > 2
+    return 123
+class Awaitable:
+    def __init__(self, obj):
+        self.value = obj
+    def __await__(self):
+        yield self
+        return self.value
+```
+
+`await`会将`send`一层一层地传递下去，这里不会造成阻塞，直到运行到了`Awaitable`中的`yield`，此时开始出栈，并向上传播，造成`corotine`在`await`这个地方暂停，由此`send`函数也就返回了，`Task.run`继续向下运行。
+
+协程都让出了执行权，但这个`Task.run`还在这里运行，那么前面的协程不久白出栈了吗，所以`Task.run`函数必须要退出。
+
+```python
+class Task:
+    def __init__(self, coro):
+        self.coro = coro
+        self._done = False
+        self._result = None
+    def run(self):
+        if not self._done:
+            try:
+                # 只有任务还没有结束时 才 send
+                x = self.coro.send(None)
+            except StopIteration:
+                self._result = e.value
+                self._done = True
+            else:
+                assert isinstance(x, Awaitable)
+                #func, arg = x.value
+                #func(arg) 程序运行一半就结束了 但还是阻塞了2秒 所以这个操作不应该在这里执行
+        else:
+            print('task done')
+```
+
+```python
+if __name__ == '__main__':
+    t = Task(one_task())
+    t.run()
+    # 等待2s 的时间做其他的事
+    for _ in range(10):
+        print('doing other thing..')
+        sleep(0.2)
+    t.run()
+    # 以上是完成了手动调度任务 实际上我们需要一个东西来自动调度的 也就是 event loop
+```
+
+返回值通过作为`await`表达式语句的返回值一层一层往上游传递，最顶层的`corotine`则通过 `except  StopIteration`传递出来，也就意味着这个任务真正地结束了。
+
+实验代码
+
+```python
+import time
+from time import sleep
+
+class Awaitable:
+    def __init__(self, obj):
+        self.value = obj
+    def __await__(self):
+        yield self
+class Task:
+    def __init__(self, coro):
+        self.coro = coro
+        self._done = False
+        self._result = None
+    def run(self):
+        if not self._done:
+            try:
+                # 只有任务还没有结束时 才 send
+                x = self.coro.send(None)
+            except StopIteration as e:
+                self._result = e.value
+                self._done = True
+            else:
+                assert isinstance(x, Awaitable)
+                #func, arg = x.value
+                #func(arg) 程序运行一半就结束了 但还是阻塞了2秒 所以这个操作不应该在这里执行
+        else:
+            print('task done')
+async def small_step():
+    print("working..")
+    t1 = time.time()
+    await Awaitable((sleep, 2))
+    print("working ...")
+    return 123
+async def big_step():
+    small_result = await small_step()
+    print(f"small step end with {small_result}")
+    return small_result * 1888
+async def one_task():
+    print("start task")
+    print("begin big step")
+    big_result = await big_step()
+    print('endbigstep')
+    print('end task')
+if __name__ == "__main__":
+    t = Task(one_task())
+    t.run()
+    for _ in range(10):
+        print("do other things")
+        sleep(0.2)
+    t.run()
+```
+
